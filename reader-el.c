@@ -61,190 +61,6 @@ static void error(const char *fn, int line, const char *func,
     abort();    
 }
 
-/********************************************************* Get the host name. */
-
-#ifdef TRACK_RESOURCES
-#define MAX_HOSTNAME 256
-
-const char *sysdep_hostname(void)
-{
-    static char hn[MAX_HOSTNAME];
-
-    struct utsname undata;
-    uname(&undata);
-    strcpy(hn, undata.nodename);
-    return hn;
-}
-#endif
-
-#ifdef TRACK_MEMORY
-#define MALLOC(x) malloc_wrapper(x)
-#define CALLOC(x, y) calloc_wrapper((x), (y))
-#define FREE(x) free_wrapper(x)
-
-#else
-
-#define MALLOC(x) malloc((x))
-#define CALLOC(x, y) calloc((x), (y))
-#define FREE(x) free((x))
-
-#endif
-
-#ifdef TRACK_MEMORY
-index_t malloc_balance = 0;
-
-struct malloc_track_struct
-{
-    void *p;
-    size_t size;
-    struct malloc_track_struct *prev;
-    struct malloc_track_struct *next;
-};
-
-typedef struct malloc_track_struct malloc_track_t;
-
-malloc_track_t malloc_track_root;
-size_t malloc_total = 0;
-
-#define MEMTRACK_STACK_CAPACITY 512
-size_t memtrack_stack[MEMTRACK_STACK_CAPACITY];
-index_t memtrack_stack_top = -1;
-
-void *malloc_wrapper(size_t size)
-{
-    if(malloc_balance == 0) {
-        malloc_track_root.prev = &malloc_track_root;
-        malloc_track_root.next = &malloc_track_root;
-    }
-    void *p = malloc(size);
-    if(p == NULL)
-        ERROR("malloc fails");
-    malloc_balance++;
-
-    malloc_track_t *t = (malloc_track_t *) malloc(sizeof(malloc_track_t));
-    t->p = p;
-    t->size = size;
-    pnlinkprev(&malloc_track_root, t);
-    malloc_total += size;
-    for(index_t i = 0; i <= memtrack_stack_top; i++)
-        if(memtrack_stack[i] < malloc_total)
-            memtrack_stack[i] = malloc_total;
-    return p;
-}
-
-void *calloc_wrapper(size_t n, size_t size)
-{
-    if(malloc_balance == 0) {
-        malloc_track_root.prev = &malloc_track_root;
-        malloc_track_root.next = &malloc_track_root;
-    }
-    void *p = calloc(n, size);
-    if(p == NULL)
-        ERROR("malloc fails");
-    malloc_balance++;
-
-    malloc_track_t *t = (malloc_track_t *) malloc(sizeof(malloc_track_t));
-    t->p = p;
-    t->size = (n*size);
-    pnlinkprev(&malloc_track_root, t);
-    malloc_total += (n*size);
-    for(index_t i = 0; i <= memtrack_stack_top; i++)
-        if(memtrack_stack[i] < malloc_total)
-            memtrack_stack[i] = malloc_total;
-    return p;
-}
-
-void free_wrapper(void *p)
-{
-    malloc_track_t *t = malloc_track_root.next;
-    for(;
-        t != &malloc_track_root;
-        t = t->next) {
-        if(t->p == p)
-            break;
-    }
-    if(t == &malloc_track_root)
-        ERROR("FREE issued on a non-tracked pointer %p", p);
-    malloc_total -= t->size;
-    pnunlink(t);
-    free(t);
-
-    free(p);
-    malloc_balance--;
-}
-
-index_t *alloc_idxtab(index_t n)
-{
-    index_t *t = (index_t *) MALLOC(sizeof(index_t)*n);
-    return t;
-}
-
-void push_memtrack(void)
-{
-    assert(memtrack_stack_top + 1 < MEMTRACK_STACK_CAPACITY);
-    memtrack_stack[++memtrack_stack_top] = malloc_total;
-}
-
-size_t pop_memtrack(void)
-{
-    assert(memtrack_stack_top >= 0);
-    return memtrack_stack[memtrack_stack_top--];
-}
-
-size_t current_mem(void)
-{
-    return malloc_total;
-}
-
-double inGiB(size_t s)
-{
-    return (double) s / (1 << 30);
-}
-
-void print_current_mem(void)
-{
-    fprintf(stdout, "{curr: %.2lfGiB}", inGiB(current_mem()));
-    fflush(stdout);
-}
-
-void print_pop_memtrack(void)
-{
-    fprintf(stdout, "{peak: %.2lfGiB}", inGiB(pop_memtrack()));
-    fflush(stdout);
-}
-
-void inc_malloc_total(size_t size)
-{
-    malloc_total += size;
-}
-
-void dec_malloc_total(size_t size)
-{
-    malloc_total -= size;
-}
-#endif
-
-/******************************************************** Timing subroutines. */
-
-#ifdef TRACK_RESOURCES
-#define TIME_STACK_CAPACITY 256
-double start_stack[TIME_STACK_CAPACITY];
-index_t start_stack_top = -1;
-
-void push_time(void)
-{
-    assert(start_stack_top + 1 < TIME_STACK_CAPACITY);
-    start_stack[++start_stack_top] = omp_get_wtime();
-}
-
-double pop_time(void)
-{
-    double wstop = omp_get_wtime();
-    assert(start_stack_top >= 0);
-    double wstart = start_stack[start_stack_top--];
-    return (double) (1000.0*(wstop-wstart));
-}
-#endif
 
 /********************************************************* Utility functions. */
 
@@ -270,7 +86,6 @@ index_t prefixsum(index_t n, index_t *a, index_t k)
     }
     return run;
 }
-
 
 /*************************************************** Graph build subroutines. */
 
@@ -363,10 +178,6 @@ void graph_add_terminal(graph_t *g, index_t u)
 
 graph_t * graph_load(FILE *in)
 {
-#ifdef TRACK_RESOURCES
-    push_time();
-    push_memtrack();
-#endif
 
     char buf[MAX_LINE_SIZE];
     char in_line[MAX_LINE_SIZE];
@@ -431,25 +242,8 @@ graph_t * graph_load(FILE *in)
     assert(g->m == g->num_edges && g->m != 0);
     assert(g->k == g->num_terminals && g->k != 0);
 
-#ifdef TRACK_RESOURCES
-    double time = pop_time();
-    fprintf(stdout, "input: n = %d, m = %d, k = %d, cost = %d [%.2lfms] ",
-                    g->n, g->m, g->k, g->cost, time);
-    print_pop_memtrack();
-    fprintf(stdout, " ");
-    print_current_mem();
-    fprintf(stdout, "\n");
-    fprintf(stdout, "terminals:");
-    for(index_t i=0; i<g->k; i++) 
-        fprintf(stdout, " %d", g->terminals[i]+1);
-    fprintf(stdout, "\n");
-    fflush(stdout);
-#endif
     return g;
 }
-
-
-
 
 /******************************************************** Root query builder. */
 
@@ -471,11 +265,6 @@ typedef struct steinerq
 
 steinerq_t *root_build(graph_t *g)
 {
-#ifdef TRACK_RESOURCES
-    fprintf(stdout, "root build: ");
-    push_time();
-    push_memtrack();
-#endif
     index_t n = g->n;
     index_t m = g->m;
     index_t k = g->k;
@@ -491,17 +280,8 @@ steinerq_t *root_build(graph_t *g)
     root->pos = pos;
     root->adj = adj;
 
-#ifdef TRACK_RESOURCES
-    push_time();
-#endif
     for(index_t u = 0; u < n; u++)
         pos[u] = 0;
-#ifdef TRACK_RESOURCES
-    double time = pop_time();
-    fprintf(stdout, "[zero: %.2lfms] ", time);
-    fflush(stdout);
-    push_time();
-#endif
 
     index_t *e = g->edges;
     for(index_t j = 0; j < 3*m; j+=3)
@@ -513,13 +293,6 @@ steinerq_t *root_build(graph_t *g)
     pos[n] = (2*n);
     index_t run = prefixsum(n+1, pos, 1);
     assert(run == ((n+1)+(4*m)+(2*n)));
-
-#ifdef TRACK_RESOURCES
-    time = pop_time();
-    fprintf(stdout, "[pos: %.2lfms] ", time);
-    fflush(stdout);
-    push_time();
-#endif
 
     for(index_t u = 0; u < n; u++)
         adj[pos[u]] = 0;
@@ -554,29 +327,9 @@ steinerq_t *root_build(graph_t *g)
     }
 
     index_t *tt = g->terminals;
-#ifdef TRACK_RESOURCES
-    pop_time();
-    fprintf(stdout, "[adj: %.2lfms] ", time);
-    fflush(stdout);
-	push_time();
-#endif
 
     for(index_t u = 0; u < k; u++)
         kk[u] = tt[u];
-
-#ifdef TRACK_RESOURCES
-    time = pop_time();
-    fprintf(stdout, "[term: %.2lfms] ", time);
-    fflush(stdout);
-
-    time = pop_time();
-    fprintf(stdout, "done. [%.2lfms] ", time);
-    print_pop_memtrack();
-    fprintf(stdout, " ");
-    print_current_mem();
-    fprintf(stdout, "\n");
-    fflush(stdout);
-#endif
 
     return root;
 }
@@ -592,182 +345,6 @@ void steinerq_free(steinerq_t *root)
     FREE(root);
 }
 
-/********************************************************* Debug routines. */
-
-#ifdef DEBUG
-void print_nbits(index_t n, index_t N)
-{            
-    index_t bits[64];
-    for(index_t i=0; i<64; i++)
-        bits[i] = (N>>i)&0x01;
-    for(index_t i=n-1; i >= 0; i--)
-        fprintf(stdout, "%d", bits[i]);
-    fflush(stdout);
-}
-
-void print_bits(index_t n)
-{
-    fprintf(stdout, "n: %d bits: ", n); 
-    index_t size = sizeof(index_t)*8;
-
-    for(index_t i = 0; i<size; i++)
-    {   
-        index_t mask = ((index_t)(0x01) << (size-1-i));
-        fprintf(stdout, "%d", (index_t)((n&mask) ? 1 : 0));
-    }
-    fprintf(stdout, "\n");
-    fflush(stdout);
-}
-
-void print_array(index_t n, index_t *a)
-{
-    fprintf(stdout, "n: %d a:", n);
-
-    for(index_t i = 0; i < n; i++)
-    {
-        fprintf(stdout, " %d", a[i]+1);
-    }
-    fprintf(stdout, "\n");
-    fflush(stdout);
-}
-
-void print_adj(index_t u, index_t *pos, index_t *adj)
-{
-    index_t p = pos[u];
-    index_t nu = adj[p];
-    index_t *adj_u = adj + p + 1;
-    fprintf(stdout, "adjacency list (%d) : ", u);
-    for(index_t i = 0; i < nu; i++)
-        fprintf(stdout, " %d %d|", adj_u[2*i]+1, adj_u[2*i+1]);
-    fprintf(stdout, "\n");
-}
-
-void print_dist(index_t n, index_t *d)
-{
-    fprintf(stdout, "Shortest distance: \n");
-    for(index_t u = 0; u < n; u++)
-        fprintf(stdout, "%d: %d\n", u+1, d[u]);
-    fflush(stdout);
-}
-
-
-void print_dist_matrix(index_t *d_N, index_t n)
-{
-    fprintf(stdout, "distance matrix: \n");
-    for(index_t u = 0; u < n; u++)
-    {
-        for(index_t v = 0; v < n; v ++)
-        {
-            fprintf(stdout, " %d", d_N[u*n+v]);
-        }
-        fprintf(stdout, "\n");
-    }
-    fflush(stdout);
-}
-
-void print_graph(graph_t *g)
-{
-    fprintf(stdout, "graph_t: \n");
-    fprintf(stdout, "n: %d\n", g->n);
-    fprintf(stdout, "m: %d\n", g->m);
-    fprintf(stdout, "k: %d\n", g->k);
-    fprintf(stdout, "num edges: %d\n", g->num_edges);
-    fprintf(stdout, "num terminals: %d\n", g->num_terminals);
-    fprintf(stdout, "edge capacity: %d\n", g->edge_capacity);
-    fprintf(stdout, "edges: \n");
-    for(index_t i = 0; i < g->num_edges; i++) 
-    {    
-        index_t *e = g->edges + (3*i);
-        index_t u = e[0];
-        index_t v = e[1];
-        index_t w = e[2];
-        fprintf(stdout, "E %d %d %d\n", u+1, v+1, w);
-    }
-
-    fprintf(stdout, "terminals: \n");
-    for(index_t i = 0; i < g->num_terminals; i++) 
-        fprintf(stdout, "T %d\n", g->terminals[i]+1);
-
-    fflush(stdout);
-}
-
-void print_steinerq(steinerq_t *root)
-{
-    fprintf(stdout, "steinerq_t: \n");
-    fprintf(stdout, "n: %d\n", root->n);
-    fprintf(stdout, "m: %d\n", root->m);
-    fprintf(stdout, "k: %d\n", root->k);
-    index_t *pos = root->pos;
-    index_t *adj = root->adj;
-    fprintf(stdout, "pos:");
-    for(index_t i = 0; i < root->n; i++)
-        fprintf(stdout, " %d", pos[i]);
-    fprintf(stdout, "\nadj:\n");
-    index_t n = root->n + 1;
-    for(index_t u = 0; u < n; u++)
-    {
-        index_t pu = pos[u];
-        index_t adj_u = adj[pu];
-        fprintf(stdout, "node: %d edges: %d|", u+1, adj_u);
-        for(index_t i = 0; i < adj_u; i++)
-        {
-            fprintf(stdout, " %d %d|", 
-                            adj[pu + 1 + (2*i)]+1, 
-                            adj[pu + 1 + (2*i+1)]);
-        }
-        fprintf(stdout, "\n");
-    }
-    fprintf(stdout, "\n");
-    fflush(stdout);
-}
-
-void print_f_v(index_t n, index_t k, index_t *f_v)
-{
-    fprintf(stdout, "f_v: \n");
-    for(index_t X = 0; X < (1<<(k-1)); X++) 
-    {    
-        fprintf(stdout, "X->");
-        print_nbits(k, X+1);
-        fprintf(stdout, "\n");
-     
-        index_t *f_X = f_v + (X*n);
-        for(index_t v = 0; v < n; v++) 
-        {
-            fprintf(stdout, "%d", v+1);
-            if(f_X[v] == MATH_INF)
-                fprintf(stdout, " MATH_INF\n");
-            else
-                fprintf(stdout, " %d\n", f_X[v]);
-        }
-    }
-    fflush(stdout);
-}
-
-void print_b_v(index_t n, index_t k, index_t *b_v)
-{
-    fprintf(stdout, "b_v: \n");
-    for(index_t X = 0; X < (1<<(k-1)); X++)
-    {
-        fprintf(stdout, "X->\n");
-        print_nbits(k, X+1);
-        fprintf(stdout, "\n");
-
-        index_t *b_X = b_v + ((index_t)(2)*X*n);
-
-        for(index_t v = 0; v < n; v++)
-        {
-            index_t u = b_X[2*v];
-            index_t Xd = b_X[2*v + 1];
-
-            fprintf(stdout, "v: %d u: %d v: ",
-                    v==-1?-1:v+1, u==-1?-1:u+1);
-            print_nbits(k, Xd);
-            fprintf(stdout, "\n");
-        }
-    }
-	fflush(stdout);
-}
-#endif 
 
 /******************************************************* Heap implementaions. */
 
@@ -785,10 +362,7 @@ typedef struct bheap
     index_t n;       // size of binary heap
     bheap_item_t *a; // stores (distance, vertex) pairs of the binary heap
     index_t *p;      // stores the positions of vertices in the binary heap
-#ifdef TRACK_BANDWIDTH
-    index_t key_comps;
-    index_t mem;
-#endif
+
 } bheap_t;
 
 bheap_t * bh_alloc(index_t n)
@@ -798,26 +372,13 @@ bheap_t * bh_alloc(index_t n)
     h->n = 0; 
     h->a = (bheap_item_t *) malloc((n+1)*sizeof(bheap_item_t));
     h->p = (index_t *) malloc(n*sizeof(index_t));
-#ifdef TRACK_BANDWIDTH
-    h->key_comps  = 0; 
-    h->mem = 0;
-#endif
-#ifdef TRACK_MEMORY
-    inc_malloc_total(sizeof(bheap_t) + 
-                     ((n+1)*sizeof(bheap_item_t)) +
-                     (n*sizeof(index_t)));
-#endif
+
+
     return h;
 }
 
 void bh_free(bheap_t *h)
 {
-#ifdef TRACK_MEMORY
-    index_t n = h->max_n;
-    dec_malloc_total(sizeof(bheap_t) + 
-                     ((n+1)*sizeof(bheap_item_t)) +
-                     (n*sizeof(index_t)));
-#endif
     free(h->a);
     free(h->p);
     free(h);
@@ -830,27 +391,14 @@ static void bh_siftup(bheap_t *h, index_t p, index_t q)
     index_t j = p;
     index_t k = 2 * p;
     bheap_item_t y = h->a[p];
-#ifdef TRACK_BANDWIDTH
-    index_t mem = 0;
-    index_t key_comps = 0;
-#endif
 
     while(k <= q)
     {
         bheap_item_t z = h->a[k];
         if(k < q)
         {
-#ifdef TRACK_BANDWIDTH
-            mem++;
-            key_comps++;
-#endif
             if(z.key > h->a[k + 1].key) z = h->a[++k];
         }
-
-#ifdef TRACK_BANDWIDTH
-        mem += 2;
-        key_comps++;
-#endif
         if(y.key <= z.key) break;
         h->a[j] = z;
         h->p[z.item] = j;
@@ -860,11 +408,6 @@ static void bh_siftup(bheap_t *h, index_t p, index_t q)
 
     h->a[j] = y;
     h->p[y.item] = j;
-
-#ifdef TRACK_BANDWIDTH
-    h->mem += mem;
-    h->key_comps += key_comps;
-#endif
 }
 
 bheap_item_t bh_min(bheap_t *h)
@@ -875,20 +418,11 @@ bheap_item_t bh_min(bheap_t *h)
 static void bh_insert(bheap_t *h, index_t item, index_t key)
 {
     index_t i = ++(h->n);
-#ifdef TRACK_BANDWIDTH
-    index_t mem = 0;
-    index_t key_comps = 0;
-#endif
-
     while(i >= 2)
     {
         index_t j = i / 2;
         bheap_item_t y = h->a[j];
 
-#ifdef TRACK_BANDWIDTH
-        mem ++;
-        key_comps++;
-#endif
         if(key >= y.key) break;
 
         h->a[i] = y;
@@ -899,27 +433,15 @@ static void bh_insert(bheap_t *h, index_t item, index_t key)
     h->a[i].item = item;
     h->a[i].key = key;
     h->p[item] = i;
-#ifdef TRACK_BANDWIDTH
-    h->mem += mem;
-    h->key_comps += key_comps;
-#endif
 }
 
 static void bh_delete(bheap_t *h, index_t item)
 {
     index_t n = --(h->n);
     index_t p = h->p[item];
-#ifdef TRACK_BANDWIDTH
-    index_t mem = 0;
-    index_t key_comps = 0;
-#endif
 
     if(p <= n)
     {
-#ifdef TRACK_BANDWIDTH
-        key_comps++;
-        mem += 2;
-#endif
         if(h->a[p].key <= h->a[n + 1].key)
         {
             h->a[p] = h->a[n + 1];
@@ -933,29 +455,15 @@ static void bh_delete(bheap_t *h, index_t item)
             h->n = n;
         }
     }
-#ifdef TRACK_BANDWIDTH
-    h->mem += mem;
-    h->key_comps += key_comps;
-#endif
 }
 
 static void bh_decrease_key(bheap_t *h, index_t item, index_t new_key)
 {
-#ifdef TRACK_BANDWIDTH
-    index_t mem = 1;
-    index_t key_comps = 0;
-#endif
-
     index_t i = h->p[item];
     while(i >= 2)
     {
         index_t j = i / 2;
         bheap_item_t y = h->a[j];
-
-#ifdef TRACK_BANDWIDTH
-        mem ++;
-        key_comps++;
-#endif
         if(new_key >= y.key) break;
 
         h->a[i] = y;
@@ -966,10 +474,6 @@ static void bh_decrease_key(bheap_t *h, index_t item, index_t new_key)
     h->a[i].item = item;
     h->a[i].key = new_key;
     h->p[item] = i;
-#ifdef TRACK_BANDWIDTH
-    h->mem += mem;
-    h->key_comps += key_comps;
-#endif
 }
 
 static index_t bh_delete_min(bheap_t * h)
@@ -1012,9 +516,6 @@ void dijkstra(index_t n,
               index_t *d,
               index_t *visit,
               index_t *p
-#ifdef TRACK_BANDWIDTH
-              ,index_t *heap_ops
-#endif
              )
 {
 
@@ -1054,10 +555,6 @@ void dijkstra(index_t n,
         }
         // mem: 2n+6m
     }
-
-#ifdef TRACK_BANDWIDTH
-    *heap_ops = heap_mem(h);
-#endif
     heap_free(h);
 }
 
@@ -1102,11 +599,7 @@ void list_solution(graph_t *g)
 }
 
 void backtrack(index_t n, index_t k, index_t v, 
-               index_t X, index_t *kk, index_t *b_v
-#ifdef TRACK_RESOURCES
-               ,graph_t *g
-#endif
-              )
+               index_t X, index_t *kk, index_t *b_v)
 {
     if(X == 0 || v == -1)
         return;
@@ -1124,11 +617,7 @@ void backtrack(index_t n, index_t k, index_t v,
         fprintf(stdout, "%d %d\n", v+1, u+1);
 #endif
         index_t Xd = b_v[i_X+1];
-        backtrack(n, k, u, Xd, kk, b_v
-#ifdef TRACK_RESOURCES
-                  , g
-#endif
-                  );
+        backtrack(n, k, u, Xd, kk, b_v);
     }
     else
     {
@@ -1136,25 +625,13 @@ void backtrack(index_t n, index_t k, index_t v,
         index_t X_Xd = (X & ~Xd);
         if(X == Xd)
             return;
-        backtrack(n, k, u, Xd, kk, b_v
-#ifdef TRACK_RESOURCES
-                  , g
-#endif
-                  );
-        backtrack(n, k, u, X_Xd, kk, b_v
-#ifdef TRACK_RESOURCES
-                  , g
-#endif
-                  );
+        backtrack(n, k, u, Xd, kk, b_v);
+        backtrack(n, k, u, X_Xd, kk, b_v);
     }
 }
 
 void build_tree(index_t n, index_t k, index_t cost, 
-                index_t *kk, index_t *b_v
-#ifdef TRACK_RESOURCES
-                , graph_t *g
-#endif
-               )
+                index_t *kk, index_t *b_v)
 {
     index_t c = k-1;
     index_t C = (1<<c)-1;
@@ -1166,11 +643,7 @@ void build_tree(index_t n, index_t k, index_t cost,
     fprintf(stdout, "VALUE %d\n", cost);
 #endif
 
-    backtrack(n, k, q, C, kk, b_v
-#ifdef TRACK_RESOURCES
-              ,g
-#endif
-             );
+    backtrack(n, k, q, C, kk, b_v);
 }
 
 /**************************************************** Erickson Monma Veinott. */
@@ -1185,11 +658,7 @@ index_t emv_kernel(index_t n,
                    index_t *p,
                    index_t *visit,
                    index_t *f_v, 
-                   index_t *b_v 
-#ifdef TRACK_BANDWIDTH
-                   ,index_t *heap_ops
-#endif
-                   )
+                   index_t *b_v)
 {
     // initialisation
     index_t c = k-1;
@@ -1198,11 +667,7 @@ index_t emv_kernel(index_t n,
 
     for(index_t t = 0; t < k; t++) 
     {    
-        dijkstra(n+1, m, pos, adj, kk[t], d, visit, p
-#ifdef TRACK_BANDWIDTH
-                 ,heap_ops
-#endif
-                );
+        dijkstra(n+1, m, pos, adj, kk[t], d, visit, p);
         index_t *f_t = f_v + FV_INDEX(0, n, k, 1<<t);
         index_t *b_t = b_v + BV_INDEX(0, n, k, 1<<t);
 
@@ -1219,14 +684,14 @@ index_t emv_kernel(index_t n,
     for(index_t m = 2; m < c; m++) // k-2
     {    
         index_t z = 0;
-        // bit twiddling hacks: generating all subsets of size `m`
+        // generating all subsets of size `m`
         for(index_t X = (1<<m)-1;
             X < (1<<c);
             z = X|(X-1), X = (z+1)|(((~z & -~z)-1) >> (__builtin_ctz(X) + 1))) // cCm
         {
             index_t *f_X  = f_v + FV_INDEX(0, n, k, X);
             index_t *b_X  = b_v + BV_INDEX(0, n, k, X);
-            // bit twiddling hacks: generating proper subsets of X 
+            // generating proper subsets of X 
             index_t Xd = 0;
             for(Xd = X & (Xd - X); Xd < (X/2 + 1); Xd = X & (Xd - X)) // 2^{m-1} 
             {
@@ -1262,11 +727,7 @@ index_t emv_kernel(index_t n,
                 adj_s[2*u+1]  = f_v[i_X_u];
             }
 
-            dijkstra(n+1, m+n, pos, adj, s, d, visit, p
-#ifdef TRACK_BANDWIDTH
-                     ,heap_ops
-#endif
-                     );
+            dijkstra(n+1, m+n, pos, adj, s, d, visit, p);
             for(index_t v = 0; v < n; v++)
             {
                 f_X[v]    = d[v];
@@ -1318,11 +779,7 @@ index_t emv_kernel(index_t n,
         adj_s[2*u+1]  = f_v[i_X_u];
     }
 
-    dijkstra(n+1, m+n, pos, adj, s, d, visit, p
-#ifdef TRACK_BANDWIDTH
-             ,heap_ops
-#endif
-             );
+    dijkstra(n+1, m+n, pos, adj, s, d, visit, p);
     for(index_t v = 0; v < n; v++)
     {
         f_C[v]    = d[v];
@@ -1341,12 +798,6 @@ index_t emv_kernel(index_t n,
 
 index_t erickson_monma_veinott(steinerq_t *root)
 {
-#ifdef TRACK_RESOURCES
-    fprintf(stdout, "erickson: ");
-    fflush(stdout);
-    push_memtrack();
-    push_time();
-#endif
     index_t n   = root->n;
     index_t m   = root->m;
     index_t k   = root->k;
@@ -1374,15 +825,8 @@ index_t erickson_monma_veinott(steinerq_t *root)
         index_t *d     = (index_t *) MALLOC(n*sizeof(index_t));
         index_t *visit = (index_t *) MALLOC(n*sizeof(index_t));
         index_t *p     = (index_t *) MALLOC(n*sizeof(index_t));
-#ifdef TRACK_BANDWIDTH
-        index_t heap_ops = 0;
-#endif
-        dijkstra(n, m, root->pos, root->adj, u, d, visit
-                ,p
-#ifdef TRACK_BANDWIDTH
-                ,&heap_ops
-#endif
-                );
+
+        dijkstra(n, m, root->pos, root->adj, u, d, visit, p);
 
         // compute bandwidth
         min_cost = d[v];
@@ -1401,13 +845,7 @@ index_t erickson_monma_veinott(steinerq_t *root)
     index_t *d     = (index_t *) MALLOC((n+1)*sizeof(index_t));
     index_t *p     = (index_t *) MALLOC((n+1)*sizeof(index_t));
     index_t *visit = (index_t *) MALLOC((n+1)*sizeof(index_t));
-#ifdef TRACK_BANDWIDTH
-    index_t *heap_ops = (index_t *) MALLOC(sizeof(index_t));
-#endif
 
-#ifdef TRACK_RESOURCES
-    push_time();
-#endif
     // initialisation
     for(index_t i = 0; i < (index_t)(n*(1<<c)); i++)
         f_v[i] = MATH_INF;
@@ -1418,85 +856,22 @@ index_t erickson_monma_veinott(steinerq_t *root)
         b_v[i+1] = 0;
     }
 
-#ifdef TRACK_RESOURCES
-    double time = pop_time();
-    fprintf(stdout, "[zero: %.2lfms] ", time);
-    push_time();
-#endif
-
     // call kernel: do the hard work
-    min_cost = emv_kernel(n, m, k, root->pos, root->adj, kk, 
-                          d, p, visit, f_v, b_v
-#ifdef TRACK_BANDWIDTH
-                          ,heap_ops
-#endif
-                          );
-    
-#ifdef TRACK_RESOURCES
-    time = pop_time();
-    index_t total_heap_ops = heap_ops[0];
-    index_t mem_graph = ((5*n) + (6*m));
-    // mem: ((3^k*n + 2^(k-1)*9n + 3n*(k+1)) + 2^(k-1)*(5n+6m))*sizeof(index_t) 
-    //      + total_heap_ops*sizeof(heap_node_t)
-    index_t trans_bytes = (((index_t)(pow(3,k)*n)+(index_t)(pow(2,k-1)*9*n)+
-                      3*n*(k+1)+(index_t)(pow(2,k-1)*mem_graph))*sizeof(index_t)
-                      +total_heap_ops*sizeof(heap_node_t));
-    double trans_rate = trans_bytes / (time / 1000.0);
-    fprintf(stdout, "[kernel: %.2lfms %.2lfGiB/s] ",
-                    time, trans_rate/(1 << 30));
-    push_time();
-    graph_t *g = graph_alloc();
-    g->n = n;
-#endif
-
+    min_cost = emv_kernel(n, m, k, root->pos, root->adj, kk, d, p, visit, f_v, b_v);
     // build a Steiner tree
-    build_tree(n, k, min_cost, kk, b_v
-#ifdef TRACK_RESOURCES
-               ,g
-#endif
-               );
-
-#ifdef TRACK_RESOURCES
-    time= pop_time();
-    fprintf(stdout, "[traceback: %.2lfms] ", time);
-    time= pop_time();
-    fprintf(stdout, "done. [%.2lfms] [cost: %d] ", time, min_cost);
-    print_pop_memtrack();
-    fprintf(stdout, " ");
-    print_current_mem();
-    fprintf(stdout, "\n");
-    fflush(stdout);
-    // list a solution
-    list_solution(g);
-    graph_free(g);
-#endif
+    build_tree(n, k, min_cost, kk, b_v);
 
     FREE(d);
     FREE(f_v); 
     FREE(visit);
     FREE(p);
     FREE(b_v);
-#ifdef TRACK_BANDWIDTH
-    FREE(heap_ops);
-#endif
 
     return min_cost;
 }
 
-/******************************************************* Program entry point. */
-
 int main(int argc, char **argv)
 {
-#ifdef TRACK_RESOURCES
-    push_time();
-	push_memtrack();
-
-    fprintf(stdout, "invoked as:");
-    for(index_t f = 0; f < argc; f++) 
-        fprintf(stdout, " %s", argv[f]);
-    fprintf(stdout, "\n");
-#endif
-
     if(!strcmp(argv[1], "-h")) {
         fprintf(stdout, "Usage: %s -s <seed> <in-file>\n\n", argv[0]);
         return 0;
@@ -1504,8 +879,6 @@ int main(int argc, char **argv)
 
     FILE *in = NULL;
     if(argc < 4) {
-        //ERROR("Insufficient arguments");
-        // hack: read graph from standard input
         in = stdin;
     }
     else {
@@ -1526,25 +899,5 @@ int main(int argc, char **argv)
     // release query memory
     steinerq_free(root);
 
-#ifdef TRACK_RESOURCES
-    double time = pop_time();
-    fprintf(stdout, "grand total [%.2lfms] ", time);
-    print_pop_memtrack();
-    fprintf(stdout, "\n");
-    fprintf(stdout, "host: %s\n", sysdep_hostname());
-    fprintf(stdout, "build: %s, %s, %s\n",
-                    "edge-linear kernel",
-                    "single thread",
-                    "binary heap"
-            );
-    fprintf(stdout,
-            "compiler: gcc %d.%d.%d\n",
-            (index_t)__GNUC__,
-            (index_t)__GNUC_MINOR__,
-            (index_t)__GNUC_PATCHLEVEL__);
-    fflush(stdout);
-    assert(malloc_balance == 0);
-    assert(memtrack_stack_top < 0);
-#endif
     return 0;
 }
