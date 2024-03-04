@@ -19,7 +19,7 @@
 
 #define MAX_K 32
 
-typedef int index_t; // default to 32-bit indexing
+typedef int index_t;
 
 /********************************************************** Global constants. */
 
@@ -31,8 +31,6 @@ typedef int index_t; // default to 32-bit indexing
 
 #define MIN(X, Y) (((X) < (Y)) ? (X) : (Y))
 #define MAX(X, Y) (((X) > (Y)) ? (X) : (Y))
-
-// Linked list navigation macros. 
 
 #define pnlinknext(to,el) { (el)->next = (to)->next; (el)->prev = (to); (to)->next->prev = (el); (to)->next = (el); }
 #define pnlinkprev(to,el) { (el)->prev = (to)->prev; (el)->next = (to); (to)->prev->next = (el); (to)->prev = (el); }
@@ -244,8 +242,6 @@ graph_t * graph_load(FILE *in)
 
     return g;
 }
-
-/******************************************************** Root query builder. */
 
 /***************************************************************** Indexing. */
 // subset major index
@@ -598,8 +594,7 @@ void list_solution(graph_t *g)
     fflush(stdout);
 }
 
-void backtrack(index_t n, index_t k, index_t v, 
-               index_t X, index_t *kk, index_t *b_v)
+void backtrack(index_t n, index_t k, index_t v, index_t X, index_t *kk, index_t *b_v)
 {
     if(X == 0 || v == -1)
         return;
@@ -630,8 +625,7 @@ void backtrack(index_t n, index_t k, index_t v,
     }
 }
 
-void build_tree(index_t n, index_t k, index_t cost, 
-                index_t *kk, index_t *b_v)
+void build_tree(index_t n, index_t k, index_t cost, index_t *kk, index_t *b_v)
 {
     index_t c = k-1;
     index_t C = (1<<c)-1;
@@ -856,7 +850,7 @@ index_t erickson_monma_veinott(steinerq_t *root)
         b_v[i+1] = 0;
     }
 
-    // call kernel: do the hard work
+    // call kernel
     min_cost = emv_kernel(n, m, k, root->pos, root->adj, kk, d, p, visit, f_v, b_v);
     // build a Steiner tree
     build_tree(n, k, min_cost, kk, b_v);
